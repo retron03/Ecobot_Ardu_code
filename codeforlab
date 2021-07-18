@@ -1,0 +1,150 @@
+#include <OneWire.h>
+#include <Servo.h>
+#include <SoftwareSerial.h>
+#include <DallasTemperature.h>
+//Переменные, константы и сруктуры
+Servo srv_ph; // создаём экземпляр класса Servo для управления сервоприводом (c PH-датчиком)
+Servo srv_turb; // создаём экземляр класса Servo для управления сервоприводом (c датчиком мутности воды)
+OneWire oneWire(55); // вход датчиков 18b20, аналоговый А1(55 цифровой)
+SoftwareSerial serial_connect(10, 11);
+DallasTemperature ds(&oneWire);
+ 
+#define BUFFER_SIZE 64 //ограничение буфера (предотвращение переполнения)
+ 
+char inData[BUFFER_SIZE]; //Это символьный буфер, куда будут отправляться данные, отправленные скриптом Python.
+char inChar=-1; //Инициализация
+ 
+ 
+int indicator = 0; //индикатор
+int tabval[50]; // массив со значениями входного напряжения Ph- датчика
+int temp = 0; // переменная промежуточного значения при сортировке
+int count=0;//Это количество строк, отправленных приложением (Python)
+int i=0;
+ 
+byte indice = 0;// переменные сортировки
+byte indice1 = 0;
+ 
+String send_result; //перменная для хранения результата и дальнейшего его отправления.
+String gps_data; //
+ 
+float sum_value = 0; //переменная суммы элементов массива
+float correct = 19.4; // корректировка значения
+float average_value = 0.00; // среднее значение напряжения
+ 
+const byte rPin = 14;
+const byte gPin = 16;
+const byte bPin = 17;
+ 
+void setup()
+{
+  Serial.begin(9600); //Инициализация связи с монитором последовательного порта
+  serial_connect.begin(9600); //Инициализация связи с Bluetooth- модулем
+  serial_connect.println("-----------(Ready to connect)----r-------"); //отправление 'Ready to connect' для начала передачи данных
+  Serial.println("-------------(Starting)--------------"); //отправление "(Starting)"- начало работы c Bluetooth- модулем
+  ds.begin(); // начало работы с датчиком температуры (DS18B20)
+  srv_ph.attach(4); //подключение серво- двигателя с Ph- датчиком на роторе к 4-ому цифровому выходу для управления
+  srv_turb.attach(5);
+  srv_ph.write(90);
+  srv_turb.write(0);
+  gps_data = "  00.00.00 N 00.00.00 W";
+  //подключение серво- двигателя с датчиком мутности воды на роторе к 5-ому цифровому выходу для управления
+  pinMode(3, OUTPUT); //вывод на 3-ий цифровой (для управения очисткой датчика мутности воды)
+  delay(5000);
+ }
+void loop()
+{
+  byte byte_count=serial_connect.available();
+  if(byte_count){
+    Serial.println("Incoming Data");
+    int first_bytes=byte_count;
+    int remaining_bytes=0;
+    if(first_bytes>=BUFFER_SIZE-1)
+    {
+      remaining_bytes=byte_count-(BUFFER_SIZE-1);
+    }
+    for(i=0;i<first_bytes;i++)
+    {
+      inChar=serial_connect.read();
+      inData[i]=inChar;
+    }
+    inData[i]='\0';
+    for(i=0;i<remaining_bytes;i++)
+    {
+      inChar=serial_connect.read();
+    }
+    Serial.println(inData);//Print to the monitor what was detected
+    sensors_voids();
+    serial_connect.println(send_result+gps_data+String(count));
+    send_result = "";
+    count++;
+  delay(1000);//Pause for a moment
+  }
+}
+ 
+void sensors_voids(){
+  temperature_level();
+  for (i=1;i<91;i++){
+    srv_turb.write(i);
+    delay(20);
+  }
+  turbidity_level(); // получение значения мутности воды
+  delay(1000);
+    for (i=90;i>0;i--){
+    srv_turb.write(i);
+    delay(20);
+  }
+  delay(1000);
+  for (i=90;i>0;i--){
+    srv_ph.write(i);
+    delay(20);
+  }
+  ph_level(); //получение значения 
+  delay(1000);
+    for (i=1;i<91;i++){
+    srv_ph.write(i);
+    delay(20);
+  }
+  digitalWrite(13, HIGH); //омыв датчика 3 сек
+  delay(3000);
+  digitalWrite(13, LOW);
+  }
+ 
+                    //Процедуры для сенсоров
+                    void ph_level(){
+                     for (indice = 0; indice < 50; indice++) //заполнение массива значениями с порта А2
+                     {
+                     tabval[indice] = analogRead(A2);
+                     delay(60);
+                     }
+                   
+                    for (indice = 0; indice < 49; indice++) //сортировка массива
+                     {
+                      for (indice1 = indice + 1; indice1 < 50; indice1++)
+                      {
+                        if (tabval[indice] > tabval[indice1])
+                          {
+                            temp = tabval[indice];
+                            tabval[indice] = tabval[indice1];
+                            tabval[indice1] = temp;
+                          }
+                        }
+                      }
+                   
+                     sum_value = 0;
+                     for (int indice = 10; indice < 39; indice++)//суммирование элементов данного массива
+                     sum_value += tabval[indice];
+                    
+                     average_value = ((float)sum_value * 5.0 / 1024) / 30; // среднее напряжение на аналоговом выводе A2
+                     send_result = send_result + String(-5.70 * average_value + correct);
+                     }
+                    
+                    void turbidity_level()
+                    {
+                      int turbidityValue = analogRead(A0);
+                      send_result = send_result + String(turbidityValue/100)+"NTU ";
+                     
+                    }
+                    void temperature_level(){
+                      ds.requestTemperatures(); // считываем температуру с датчиков, на это требуется 750мс
+                      send_result = send_result + String(ds.getTempCByIndex(0))+"C ";
+                      }
